@@ -1,31 +1,49 @@
-name: Build Alblozy APK
+name: Alblozy APK Build
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
   build:
+    name: Build Alblozy APK
     runs-on: ubuntu-latest
 
     steps:
-      - name: تحميل الملفات
+      # 1) تحميل ملفات المشروع
+      - name: تحميل ملفات المشروع
         uses: actions/checkout@v4
 
-      - name: إعداد Java
+      # 2) إعداد Java
+      - name: إعداد Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
+      # 3) إعداد Android SDK
       - name: إعداد Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: |
+            platform-tools
+            platforms;android-35
+            build-tools;35.0.0
 
-      - name: تثبيت Android SDK
-        run: |
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+      # 4) إعداد Gradle
+      - name: إعداد Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
 
+      # 5) إنشاء مشروع Android
       - name: إنشاء مشروع Android
+        shell: bash
         run: |
+          set -e
+
           mkdir -p app/src/main/java/com/alblozy/app
           mkdir -p app/src/main/assets
           mkdir -p app/src/main/res/values
@@ -37,6 +55,12 @@ jobs:
           cp styles.xml app/src/main/res/values/styles.xml
           cp ic_launcher.xml app/src/main/res/drawable/ic_launcher.xml
 
+      # 6) إنشاء ملف Gradle الرئيسي
+      - name: إنشاء ملفات Gradle
+        shell: bash
+        run: |
+          set -e
+
           cat > settings.gradle <<'EOF'
           pluginManagement {
               repositories {
@@ -45,6 +69,7 @@ jobs:
                   gradlePluginPortal()
               }
           }
+
           dependencyResolutionManagement {
               repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
               repositories {
@@ -52,7 +77,8 @@ jobs:
                   mavenCentral()
               }
           }
-          rootProject.name='AlblozyAndroid'
+
+          rootProject.name = 'AlblozyAndroid'
           include ':app'
           EOF
 
@@ -61,6 +87,17 @@ jobs:
               id 'com.android.application' version '8.5.2' apply false
           }
           EOF
+
+          cat > gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          EOF
+
+      # 7) إنشاء إعدادات تطبيق Android
+      - name: إنشاء إعدادات التطبيق
+        shell: bash
+        run: |
+          set -e
 
           cat > app/build.gradle <<'EOF'
           plugins {
@@ -78,22 +115,60 @@ jobs:
                   versionCode 72
                   versionName '72.0'
               }
+
+              buildTypes {
+                  debug {
+                      minifyEnabled false
+                  }
+
+                  release {
+                      minifyEnabled false
+                  }
+              }
           }
           EOF
 
-          echo "org.gradle.jvmargs=-Xmx2048m" > gradle.properties
-
-      - name: إنشاء Gradle Wrapper
+      # 8) فحص ملفات المشروع
+      - name: فحص ملفات المشروع
+        shell: bash
         run: |
-          gradle wrapper --gradle-version 8.7
+          echo "=== ملفات المشروع ==="
+          find . -maxdepth 5 -type f | sort
 
+          echo "=== Java ==="
+          java -version
+
+          echo "=== Gradle ==="
+          gradle --version
+
+          echo "=== Android SDK ==="
+          sdkmanager --list_installed | head -50
+
+      # 9) بناء APK
       - name: بناء APK
+        shell: bash
         run: |
-          chmod +x gradlew
-          ./gradlew assembleDebug
+          set -e
 
-      - name: حفظ APK
+          gradle clean assembleDebug --stacktrace
+
+      # 10) التأكد من وجود APK
+      - name: فحص APK
+        shell: bash
+        run: |
+          set -e
+
+          echo "=== APK files ==="
+          find app/build/outputs/apk -type f -name "*.apk" -print
+
+          test -f app/build/outputs/apk/debug/app-debug.apk
+
+          ls -lh app/build/outputs/apk/debug/app-debug.apk
+
+      # 11) رفع APK
+      - name: رفع APK
         uses: actions/upload-artifact@v4
         with:
           name: Alblozy-APK
           path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
